@@ -1,0 +1,160 @@
+// 
+// Compact Model of CNT interconnect 
+
+`include "disciplines.vams"
+`include "constants.vams"
+// Physical Constants
+`define pi 3.1416
+`define hb 1.0544e-34		 //Modified planks constant
+`define q 1.602e-19		 //Charge
+`define epo 8.86e-12		 // Permittivity of free space
+`define kb 1.38e-23 		 // Boltzmann Constant
+`define K 8.612e-5		
+`define ac 1.42e-10 		//C-C Bond Length
+`define Vpi 2.97			//C-C Bond energy
+
+
+module CNT(p,n);
+inout p,n;
+electrical p,n; //External Nodes
+electrical x,y,z,p1,n1,gnd;
+electrical xp,yp,zp;
+ground gnd;
+branch (p,p1) rpe;
+ branch (p1,x) r1;
+ branch (x,y) l1;
+ branch (y,gnd) c;
+branch (z,n1) r2;
+branch (n1,n) rne;
+ branch (y,z) l2;
+// For parallel networks
+ branch (p,xp) r1p;
+ branch (xp,yp) l1p;
+ branch (yp,gnd) cp;
+branch (zp,n) r2p;
+ branch (yp,zp) l2p;
+branch(y,yp) ccp;
+//Instance Parameters
+parameter real diameter =1.0e-9 from [0:inf);		// Tube diameter
+parameter real L = 100e-9 from [0:inf);			// Length of the nanotube
+parameter real spac=1e-9 from (-inf:inf);
+parameter real height=1e-9 from (-inf:inf);
+parameter real eins = 3.9 from (-inf:inf);
+parameter real phisb = 0 from (-inf:inf); 		
+parameter real Rp=0 from (-inf:inf);
+parameter real Rn=0 from (-inf:inf);
+parameter real Cc=0 from (-inf:inf);
+parameter real Cflag=0 from [0:1];
+parameter real Vcrit = 0.1 from (-inf:inf); // Energy for Optical phonon scattering
+parameter real lacc = 1e-6 from (-inf:inf); // Accoustic phonon scattering
+parameter real lzb = 10e-9 from (-inf:inf); // Zone boundry phonon scattering
+parameter integer np=1 from [0:inf); // Number of CNT's in parallel
+
+real Io,Ipn;
+real Lkin,Cq,Cint,Cflag1;
+real n0,m0; 	
+//********TUNNELING FUNCTION( Triangular approximation )
+	analog function real tunnel ;
+		input EE,x,lambda,AA,con,sign;
+		real EE,x,lambda,AA,con,sign;
+		real zfl, cs, t1,t2,t3,t44,t4,t5,t6;
+		begin
+			cs = x/lambda;
+ 			if(sign*EE<sign*x)
+				begin
+ 				zfl = lambda*ln(EE/x);
+				t1 = sqrt(abs(1-AA*pow((EE-x-cs*zfl),2)));
+				t2=-((cs*zfl)-(EE-x));t3 = abs(t2*sqrt(AA));
+					if (t3>1) t3=1; 
+				t4 =-t2*t1-asin(t3)/sqrt(AA); t44 = abs((EE-x)*sqrt(AA));
+					if (t44>1) t44=1;
+ 				t5 = -((EE-x)*sqrt(abs(1-(AA*(EE-x)*(EE-x)))))-asin(t44)/sqrt(AA);
+				t6=(con)/(1*x)*(t4);
+				tunnel = exp(t5*con/x)*exp(-t6);
+			end
+			else	tunnel=1;
+ 		end                            
+	endfunction
+//**********END OF TUNNELING FUNCTION
+
+analog begin : the_module
+// Variables ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+real kn1, Vt, T; // Process
+real Ts,Td, TT;
+real EE;
+real i,num,ss; 
+real nn0,lambda, AA,con,sign,aa;
+real Vpn;
+real sbs, sbd;
+real fs,fd,f,t,y;
+real beta1, beta2, beta;
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Vpn = V(p1,n1);
+// Constant expressions ****************************************************
+Io = 2*`q*`q/(`hb*`pi);
+Cq = 4*L*`q*`q/(`hb*`pi*800000);
+Lkin =L*`hb*`pi/(`q*`q*800000); //Half the inductance
+Cint = (`epo*eins*`pi*L)/(ln((diameter/spac)+sqrt(pow((diameter/spac),2)+1)));
+if (Cflag==0) Cflag1=1;
+if (Cflag==1) Cflag1=0;
+T=$temperature;
+Vt = `kb*T/`q;
+nn0=  ((4)/(3*`pi*`Vpi*`ac));
+n0= ceil(`pi*diameter*(sqrt(3)-tan(0))/(sqrt((3*(1+pow(tan(0),2)))*`ac)));
+m0= ceil((2*tan(0)*n0)/(sqrt(3)-tan(0)));
+kn1= abs(3*(m0-n0))/(1.5*diameter);
+aa = 2*kn1; lambda = -height/2; AA =pow(((nn0*`pi)/aa),2);
+con=aa*Vt*lambda;
+
+// **************************************************************************
+
+// Resistance Calculation ######################################
+f=0;
+for (ss= 1; ss<=2; ss=ss+1) // Current loop begins
+begin
+t=0;
+if (ss == 1) sign = 1; else sign =-1;
+sbs=phisb; sbd=(phisb-Vpn);
+for (i= 1; i<=500; i=i+1)// Energy Space loop
+begin
+y=0;
+EE = sign*3*i/100;
+Ts=tunnel(EE,sbs,lambda,AA,con,sign);
+Td = tunnel(EE,sbd,lambda,AA,con,sign);
+TT =(Ts*Td)/(Ts-Ts*Td+Td);
+fs=sign*(EE)/Vt;
+fd=sign*(EE+Vpn)/Vt;
+    y=TT*((sign/(1+exp(fs)))-(sign/(1+exp(fd))));
+t = t + y;
+end
+f=f+t*3/100;
+end
+// ##############################################################
+// mobility calculation%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+beta1 =Vcrit*L/Vpn;
+beta2 =L/lacc;
+beta = 1/(beta2+(L/(beta1+lzb)));
+// %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+Ipn = Io*f*beta;
+
+// Node definitions
+
+I(r1) <+ Ipn;
+V(rpe) <+ Ipn*Rp;
+V(rne) <+ Ipn*Rn;
+	V(l1) <+ Lkin*ddt(I(r1));
+	I(c) <+ Cq*ddt(V(c));
+I(r2) <+ Ipn;
+V(l2) <+ Lkin*ddt(I(r2));
+
+I(ccp) <+ (Cint*Cflag1+Cc*Cflag+2*Cq)*ddt(V(ccp));
+I(r1p) <+ Ipn*(np-1);
+	V(l1p) <+ Lkin*ddt(I(r1p));
+	I(cp) <+ Cq*ddt(V(cp));
+I(r2p) <+ Ipn*(np-1);
+V(l2p) <+ Lkin*ddt(I(r2p));
+
+end
+ endmodule

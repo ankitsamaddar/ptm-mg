@@ -1,0 +1,229 @@
+// Compact Model of CNT Transistor 
+
+`include "disciplines.vams"
+`include "constants.vams"
+// Physical Constants
+`define pi 3.1416
+`define hb 1.0544e-34		 //Modified planks constant
+`define q 1.602e-19		 //Charge
+`define epo 8.86e-12		 // Permittivity of free space
+`define kb 1.38e-23 		 // Boltzmann Constant
+`define K 8.612e-5		
+`define ac 1.42e-10 		//C-C Bond Length
+`define Vpi 2.97			//C-C Bond energy
+
+
+module CNT(d,g,s,b);
+inout g,d,s,b;
+electrical g,d,s,b; //External Nodes
+electrical di,si; // Internal nodes
+ 
+branch (b,si) bs;		//Back gate branch
+branch (d,di) dbar;	//Drain access branch
+branch (s,si) sbar;	//Source Access branch
+branch (di,si) ds;	//Channel
+branch (g,si) gs;
+//CNT Dimensions
+//Instance Parameters
+parameter real diameter =1.0e-9 from [0:inf);		// Tube diameter
+parameter real angle = 0 from [0:30]; 			// Chiral angle ( Between 0 and 30 deg only) 
+parameter real tins = 10e-9 from [0:inf);			//insulator  thickness
+parameter real eins = 25 from [0:inf); 			//Dielectric of insulator
+parameter real tback = 100e-9 from [0:inf);		//back gate insulator  thickness
+parameter real eback = 3.9 from [0:inf); 			//back gate Dielectric of insulator
+parameter real types = 1 from [-1:2);			//1=n-type -1=p-type
+parameter real L = 100e-9 from [0:inf);			// Length of the nanotube
+
+//Model Parameters
+parameter real phisb = 0 from (-inf:inf); 		// Barrier Height 
+parameter real rs = 0 from (-inf:inf);			//Source Access resistance
+parameter real rd = 0 from (-inf:inf);			//Drain Access resistance
+parameter real beta = 20 from (-inf:inf);		//Drain coupling coefficient 
+parameter real Cc = 7e-12 from (-inf:inf);		//Coupling capacitance 
+parameter real mob = 1 from (-inf:inf);			//Scattering parameters
+parameter real Csubfit = 1 from (-inf:inf);		//Vfb adjustment parameter
+parameter real Cp = 0 from (-inf:inf);		// Parasitic capacitance
+
+
+
+// Variables  
+
+real Vgs,Vds,Vbs; // External voltages 
+
+real Ichan,Cback;
+real Cq,Csum,Cins;
+integer n1,m1,NN;
+real theta;
+		//********Tunneling function( Triangular approximation )
+	analog function real tunnel ;
+		input EE,x,lambda,AA,con,sign;
+		real EE,x,lambda,AA,con,sign;
+		real zfl, cs, t1,t2,t3,t44,t4,t5,t6;
+		begin
+			cs = x/lambda;
+ 			if(sign*EE<sign*x)
+				begin
+ 				zfl = lambda*ln(EE/x);
+				t1 = sqrt(abs(1-AA*pow((EE-x-cs*zfl),2)));
+				t2=-((cs*zfl)-(EE-x));t3 = abs(t2*sqrt(AA));
+					if (t3>1) t3=1; 
+				t4 =-t2*t1-asin(t3)/sqrt(AA); t44 = abs((EE-x)*sqrt(AA));
+					if (t44>1) t44=1;
+ 				t5 = -((EE-x)*sqrt(abs(1-(AA*(EE-x)*(EE-x)))))-asin(t44)/sqrt(AA);
+				t6=(con)/(1*x)*(t4);
+				tunnel = exp(t5*con/x)*exp(-t6);
+			end
+			else	tunnel=1;
+ 		end                            
+	endfunction
+//**********End of tunneling function
+
+analog begin : the_module
+//Variables*******************************
+real qcnt,qbd,qbs,qgd,qgs,qbg,qcnt1,N0;
+real kn1; // Process parameters
+real Tsmodel; //Source Tunneling
+real Tdmodel ; // Drain tunneling
+real TTmodel; // Total Tunneling
+real y,fd; // fermi
+real EE,Elim;//Energy for integration 
+real band;
+integer i,ss,ss1,ii,ss10,ss0,num;
+real Ks,Kd,fermis,fermid;
+real con,aa;
+real eta11,eta22;
+real lambda,t,qtemp,alpha;
+real nn0,Eg,Ef,Vt,gamma,x,Vgsbar,E0,E0max,Esat;
+real deltas,deltad,deltas1,deltad1,mins,mind,maxs,maxd,phis,phid,phi,mu,dd;
+real sbs, sbd,AA;
+real sign,signmax,eta1,eta2,Io,T;
+real alphag,alphad;
+
+
+theta = angle*`pi/180;
+//Electrostatic Capacitance when the gate is coaxial - all around the CNT
+Cins=(`pi*eins*`epo/(ln((sqrt(diameter+tins)+sqrt(tins))/(sqrt(diameter+tins)-sqrt(tins)))));
+Cback=2*`pi*eback*`epo/(ln(2*tback/diameter));
+Csum = Cins+Cback+Cc+Cp;
+alphag=Cins/Csum;
+alphad=Cc/Csum;
+
+
+   Vgs = types*(alphag*V(gs)+alphad*V(ds)+types*(Cback*Csubfit/Csum)*V(bs));
+   Vds = beta*alphad*types*V(ds);
+T=$temperature;
+Vt = `kb*T/`q;
+ 
+// Generic Calculations**********************
+nn0 = ((4)/(3*`pi*`Vpi*`ac));Io =types*2*`q*`q/(`hb*`pi);gamma =`q*nn0/(Csum);
+n1= ceil(`pi*diameter*(sqrt(3)-tan(theta))/(3*(1+pow(tan(theta),2))*`ac));
+m1= ceil((2*tan(theta)*n1)/(sqrt(3)-tan(theta)));
+Eg = `Vpi*`ac*2/diameter; Ef =-Eg/2;
+NN= floor($table_model (diameter, angle, "NN_table.tbl"));
+//*****************************************************
+dd=0;
+alpha = 0.02;
+for (ss1= 1; ss1<(2*NN); ss1=ss1+1)
+begin
+if (ss1 < (NN+1)) sign = 1; else sign =-1;
+if (ss1 < (NN+1)) num = ss1; else num =ss1-NN;
+E0=(sign*(Eg/8)*(6*(num)-3-pow(-1,(num))))-(Eg/2);
+ss10=ss1+1;
+if (ss10 < (NN+1)) band = 1; else band =-1;
+if (ss10 < (NN+1)) num = ss10; else num =ss10-NN;
+E0max =(band*(Eg/8)*(6*(num)-3-pow(-1,(num))))-(Eg/2);
+
+
+Vgsbar=Vgs-(dd);
+deltas1 = sign*(Ef+Vgsbar-E0);//(Conditioning gate voltage )
+Esat = sign*(E0max-E0);  //( Band to band)
+
+deltas=(Esat-0.5*((Esat-deltas1-alpha)+sqrt(abs((pow((Esat-deltas1-alpha),2)+(4*alpha*Esat))))));
+
+
+deltad1 =sign*(Ef-Vds+Vgsbar-E0);
+deltad=(Esat-0.5*((Esat-deltad1-alpha)+sqrt(abs((pow((Esat-deltad1-alpha),2)+(4*alpha*Esat))))));
+
+mins = (deltas/(sqrt(pow(deltas,2)+0.01)));
+mind = (deltad/(sqrt(pow(deltad,2)+0.01)));
+
+x = (2*gamma)/(1+(2*gamma));
+phis = (deltas*(mins+1));
+phid = 0.5*(deltad*(mind+1));
+dd = (dd+(sign*x*(phis+phid)/2));
+end
+phi = dd-Vgs;
+
+mu = Ef-phi;
+qcnt1=0;Cq=0;
+N0= Vt*2*nn0*`q*log(1+exp(Ef/Vt));
+fd=0;
+for (ss= 1; ss<=((2*NN)-1); ss=ss+1) // Current loop begins
+begin
+
+if (ss <= NN) sign = 1; else sign =-1;
+if (ss <= NN) num = ss; else num =ss-NN;
+E0=(sign*(Eg/8)*(6*num-3-pow(-1,num)))-(Eg/2);
+
+kn1= abs(3*(num-1)-n1+m1)/(1.5*diameter);
+ss0=ss+1;
+if (ss0 <= NN) signmax = 1; else signmax =-1;
+if (ss0 <= NN) num = ss0; else num =ss0-NN;
+num=6;
+E0max =(signmax*(Eg/8)*(6*num-3-pow(-1,num)))-(Eg/2);
+
+Elim=signmax*E0max;
+eta1=(mu-E0); eta2=(mu-Vds-E0); sbs=(phisb+eta1+E0); sbd=(phisb+eta2+E0);
+aa = 2*kn1; lambda = -tins/2; AA =pow(((nn0*`pi)/aa),2);
+t= 0; qtemp= 0;con=aa*Vt*lambda;
+//*******************************************************
+for (ii= 1; ii<=100; ii=ii+1)// Energy Space loop
+begin
+y=0;
+  EE = sign*Elim*ii/100;
+Tsmodel=tunnel(EE,sbs,lambda,AA,con,sign);
+ 
+Tdmodel = tunnel(EE,sbd,lambda,AA,con,sign);
+
+TTmodel =   (Tsmodel*Tdmodel)/(Tsmodel-Tsmodel*Tdmodel+Tdmodel);
+
+fermis=sign*(EE-eta1)/Vt;
+fermid=sign*(EE-eta2)/Vt;
+    y=TTmodel*((sign/(1+exp(fermis)))-(sign/(1+exp(fermid))));
+
+t = t + y;
+
+end
+//*********************************
+Ks = (1-log(1+exp((eta1+E0-E0max)/Vt)));
+Kd = (1-log(1+exp((eta2+E0-E0max)/Vt)));
+qtemp=types*L*`q*nn0*Vt*(log(1+exp(eta1/Vt))*Ks+log(1+exp(eta2/Vt))*Kd);
+Cq =Cq+(`q*nn0*Vt*(Ks*(exp(eta1/Vt)/(1+exp(eta1/Vt)))+Kd*(exp(eta2/Vt)/(1+exp(eta2/Vt)))));
+
+qcnt =qcnt+qtemp;
+
+//Currents
+fd=fd+t*Elim/100;
+end
+
+qbd = 0;
+qbs = 0;
+qbg = -(qbs+qbd+qcnt+qgd);
+qgd = 0;
+qgs = 0;
+Ichan = fd*Io*mob;
+
+
+//Charge 
+I(ds) <+ Ichan;
+V(dbar) <+ I(dbar)*rd;
+V(sbar) <+ I(sbar)*rs;
+
+I(g) <+ ddt(qcnt);
+I(b) <+ ddt(qbg);
+I(s) <+ ddt(qgs);
+I(d) <+ ddt(qgd);
+
+
+end
+ endmodule
